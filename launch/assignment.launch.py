@@ -37,12 +37,12 @@ def generate_launch_description():
     )
 
     # TODO aruco_tracker.launch
-    # pkg_aruco_opencv = get_package_share_directory('aruco_opencv')
-    # aruco_launch = IncludeLaunchDescription(
-    #     XMLLaunchDescriptionSource(
-    #         os.path.join(pkg_aruco_opencv, 'launch', 'aruco_tracker.launch.xml'),
-    #     )
-    # )
+    pkg_aruco_opencv = get_package_share_directory('aruco_opencv')
+    aruco_launch = IncludeLaunchDescription(
+        XMLLaunchDescriptionSource(
+            os.path.join(pkg_aruco_opencv, 'launch', 'aruco_tracker.launch.xml'),
+        )
+    )
     
     # TODO run scripts of the assignment
     
@@ -50,5 +50,5 @@ def generate_launch_description():
     launchDescriptionObject.add_action(world_arg)
     launchDescriptionObject.add_action(world_launch)
     launchDescriptionObject.add_action(robot_launch)
-    #launchDescriptionObject.add_action(aruco_launch)    
+    launchDescriptionObject.add_action(aruco_launch)    
     return launchDescriptionObject
