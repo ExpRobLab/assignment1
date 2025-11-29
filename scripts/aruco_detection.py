@@ -69,7 +69,17 @@ class ImageFeature(Node):
                         'camera_link_optical',
                         rclpy.time.Time()
                     )
-                    T = tf.quaternion_matrix()
+                    marker_position = np.array(marker.pose.position)
+                    marker.pose.orientation
+
+                    R = tf.quaternion_matrix(marker.pose.orientation)
+
+                    T = np.eye(4)
+                    T[0:2,0:2] = R
+                    T[0:2,3] = marker_position.reshape(3,1)
+                    
+                    print(T)
+
                     self.detected_markers.append(marker.marker_id)
     
     def control_loop(self):

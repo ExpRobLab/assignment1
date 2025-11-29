@@ -5,6 +5,7 @@ from launch.substitutions import LaunchConfiguration
 from ament_index_python.packages import get_package_share_directory
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_xml.launch_description_sources import XMLLaunchDescriptionSource
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
@@ -45,10 +46,18 @@ def generate_launch_description():
     )
     
     # TODO run scripts of the assignment
-    
+    marker_detection = Node(
+        package="assignment1",
+        executable="aruco_detection",
+        output='screen'
+    )
+
+
     launchDescriptionObject = LaunchDescription()
     launchDescriptionObject.add_action(world_arg)
     launchDescriptionObject.add_action(world_launch)
     launchDescriptionObject.add_action(robot_launch)
-    launchDescriptionObject.add_action(aruco_launch)    
+    launchDescriptionObject.add_action(aruco_launch)
+    launchDescriptionObject.add_action(marker_detection)    
+
     return launchDescriptionObject
