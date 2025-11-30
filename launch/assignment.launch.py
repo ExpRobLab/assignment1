@@ -48,10 +48,9 @@ def generate_launch_description():
     # TODO run scripts of the assignment
     marker_detection = Node(
         package="assignment1",
-        executable="aruco_detection",
+        executable="aruco_detection.py",
         output='screen'
     )
-
 
     launchDescriptionObject = LaunchDescription()
     launchDescriptionObject.add_action(world_arg)
