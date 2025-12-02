@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+
+import rclpy
+from rclpy.node import Node
+
+import numpy as np
+import cv2
+import math
+
+from geometry_msgs.msg import Twist
+from aruco_opencv_msgs.msg import ArucoDetection
+from sensor_msgs.msg import CompressedImage, Image
+from tf2_ros import Buffer, TransformListener, TransformException, LookupException, ConnectivityException, ExtrapolationException
+
+VERBOSE = False
+
+
+class ArucoDetector(Node):
+    def __init__(self):
+        super().__init__('aruco_detection_node')
+        
+        # Listeners
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        # Subscribers
+        self.subscriber = self.create_subscription(
+            ArucoDetection,
+            '/aruco_detections',
+            self.__detection_callback,
+            1
+        )
+        self.detected_markers: dict = {}
+
+        # Publishers cmd velocity
+        self.vel_pub = self.create_publisher(Twist, '/cmd_vel', 1)
+        self.timer = self.create_timer(0.01, self.__control)
+
+        # Market detection
+        self.state = "detecting"
+        
+        # angular control params
+        self.treshold = 0.1 
+        self.Kp = 1.0
+        self.max_angular = 1.0
+
+        # marker tracking
+        self.detected_ids = set()
+        self.sorted_ids = []
+        self.target_marker_id = None    
+
+        # command to robot
+        self.robot_cmd_vel: Twist = Twist()
+        self.robot_cmd_vel.linear.x = 0.0
+        self.robot_cmd_vel.angular.z = 0.5
+
+        # Image handling: subscribe to camera and publish final frame
+        self.last_image_msg = None
+        self.final_image_published = False
+
+        self.image_sub = self.create_subscription(
+            CompressedImage,
+            '/camera/image/compressed',
+            self.__image_callback,
+            1
+        )
+
+        self.final_image_pub = self.create_publisher(
+            Image,
+            '/final_marker_image',
+            1
+        )
+
+    def __detection_callback(self, msg):
+        if self.state != "detecting":
+            return
+        
+        # spin while detecting
+        self.vel_pub.publish(self.robot_cmd_vel)
+
+        for marker in msg.markers:
+            frame_id = f"marker_{marker.marker_id}"
+
+            try:
+                odom_T_arucomarker = self.tf_buffer.lookup_transform(
+                    'odom',
+                    frame_id,
+                    rclpy.time.Time()
+                )
+
+                # store transform and numeric ID
+                self.detected_markers[frame_id] = odom_T_arucomarker
+                self.detected_ids.add(marker.marker_id)
+
+                if len(self.detected_ids) == 5 and self.state == "detecting":
+                    self.sorted_ids = sorted(list(self.detected_ids))
+                    self.target_marker_id = self.sorted_ids[0]
+                    self.state = "centering"
+                    self.get_logger().info(
+                        f"Detected 5 markers. IDs: {self.sorted_ids}. "
+                        f"Target is marker_{self.target_marker_id}"
+                    )
+
+                if frame_id not in self.detected_markers:
+                    self.get_logger().info(f"Detected new marker: {frame_id}")
+
+            except TransformException:
+                continue
+
+    def __control(self):
+        # only run controller when we are centering a specific marker
+        if self.state != "centering":
+            return
+
+        if self.target_marker_id is None:
+            return
+
+        frame_id = f"marker_{self.target_marker_id}"
+
+        try:
+            # express marker position in the robot frame
+            base_T_marker = self.tf_buffer.lookup_transform(
+                'base_footprint',
+                frame_id,
+                rclpy.time.Time()
+            )
+        except TransformException:
+            return
+
+        X = base_T_marker.transform.translation.x
+        Y = base_T_marker.transform.translation.y
+
+        # angle of marker in robot frame
+        angle_to_marker = math.atan2(Y, X)
+
+        # pure rotation: never move forward
+        self.robot_cmd_vel.linear.x = 0.0
+
+        # P controller on angle in robot frame
+        angular_cmd = self.Kp * angle_to_marker
+        angular_cmd = max(-self.max_angular, min(self.max_angular, angular_cmd))
+        self.robot_cmd_vel.angular.z = angular_cmd
+        self.vel_pub.publish(self.robot_cmd_vel)
+
+        if abs(angle_to_marker) < self.treshold:
+            # stop rotating
+            self.robot_cmd_vel.angular.z = 0.0
+            self.vel_pub.publish(self.robot_cmd_vel)
+
+            # process and save/publish the final frame ONLY ONCE
+            if (not self.final_image_published) and (self.last_image_msg is not None):
+                try:
+                    # decode JPEG/PNG from CompressedImage.data
+                    np_arr = np.frombuffer(self.last_image_msg.data, np.uint8)
+                    cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+                    if cv_image is None:
+                        self.get_logger().warn("Could not decode compressed image, nothing to save.")
+                    else:
+                        # draw circle around marker
+                        h, w = cv_image.shape[:2]
+                        center = (w // 2, h // 2)
+                        radius = min(h, w) // 8
+                        cv2.circle(cv_image, center, radius, (0, 0, 255), 3)
+
+                        # save to disk
+                        save_path = "/root/ws_ass1/last_marker.png"
+                        cv2.imwrite(save_path, cv_image)
+
+                        # publish annotated image
+                        img_msg = Image()
+                        img_msg.header = self.last_image_msg.header
+                        img_msg.height, img_msg.width = cv_image.shape[:2]
+                        img_msg.encoding = 'bgr8'
+                        img_msg.is_bigendian = 0
+                        img_msg.step = img_msg.width * 3
+                        img_msg.data = cv_image.tobytes()
+
+                        self.final_image_pub.publish(img_msg)
+
+                        self.final_image_published = True
+                        self.get_logger().info(
+                            f"Centered on marker_{self.target_marker_id}. "
+                            f"Drew circle, saved to {save_path} and published on /final_marker_image."
+                        )
+
+                except Exception as e:
+                    self.get_logger().warn(f"Error converting/saving/publishing image: {e}")
+
+            elif self.last_image_msg is None:
+                self.get_logger().warn(
+                    "Centered on marker but no image received yet, nothing to save."
+                )
+
+            self.state = "done"
+
+
+
+
+    def __image_callback(self, msg: CompressedImage):
+        # save last frame
+        if self.state in ["detecting", "centering"]:
+            self.last_image_msg = msg
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = None
+    try:
+        node = ArucoDetector()
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        if node is not None:
+            node.get_logger().info("Shutting down ImageFeature node")
+    finally:
+        if node is not None:
+            node.destroy_node()
+        cv2.destroyAllWindows()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
