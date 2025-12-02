@@ -93,9 +93,8 @@ class ArucoDetector(Node):
                     first_key = next(iter(self.detected_markers))
                     self.target_marker = self.detected_markers[first_key]
                     self.keys = list(self.detected_markers.keys())
-                    self.__set_target_angle()
                     
-                    self.get_logger().info(f"[DETECT] Detected 5 markers, {list(self.detected_markers.keys())}"f" starting centering on: {first_key}")
+                    self.get_logger().info(f"[DETECT] Detected 5 markers, {list(self.detected_markers.keys())}")
                     self.state = "centering"
 
                 if frame_id not in self.detected_markers:
@@ -105,28 +104,10 @@ class ArucoDetector(Node):
 
     
     def __control(self):
-        if self.state != "centering" or len(self.detected_markers) < 5:
+        if self.state != "centering" or not self.keys or len(self.detected_markers) < 5:
             return
-        
-        current_key = None
-        try:
-            current_key = self.keys[self.index_id]
-            # self.get_logger().info(f"Marker: {current_key}, Index: {self.index_id}")
-        except Exception as e:
-            #self.get_logger().info(e)
-            current_key = None
-            # self.get_logger().info(f" Marker: {current_key}, Index: {self.index_id}")
-        
-        
-        # retrrive the next target angle form the transformation between odom and the marker frames
-        q = self.robot_odom.pose.pose.orientation
-        (quat_x, quat_y, quat_z, quat_w) = (q.x, q.y, q.z, q.w)
-        _, _, yaw = euler_from_quaternion((quat_x, quat_y, quat_z, quat_w))
-
-        # error
-        self.error = self.angle_target - yaw
-
-        if self.error < self.treshold and self.index_id >= len(self.detected_markers) :
+        #self.get_logger().info(f"processing {self.keys[self.index_id]}, index: {self.index_id}, error: {self.error}, len: {len(self.detected_markers)}")
+        if self.index_id >= len(self.keys) :
 
             self.get_logger().info("[DONE] All markers centered. Stopping robot.")
             self.detected_markers = {}
@@ -136,38 +117,42 @@ class ArucoDetector(Node):
             self.keys = None
             return 
 
+        current_key = self.keys[self.index_id]
+
+        try:
+            # express marker position in the robot frame
+            base_T_marker = self.tf_buffer.lookup_transform('base_footprint',current_key,rclpy.time.Time())
+         
+        except Exception as e:
+            self.get_logger().info(f"error in control: {e}")
+            return  
+
+        X = base_T_marker.transform.translation.x
+        Y = base_T_marker.transform.translation.y
+        angle_target = math.atan2(Y, X)
+        # error
+        self.error = max(-self.max_angular, min(self.Kp * angle_target, self.max_angular))
+
+
+
+        
         if  abs(self.error) < self.treshold :
-            self.get_logger().info(f"[CENTERED] Marker {current_key} centered. eror = {self.error}")
-            # increment the indiex to take the next marker
-              
-            self.__save_circle_img(self.img)
-            self.index_id += 1 
-            self.get_logger().info(f"")
-            if self.index_id <len(self.detected_markers):
-                
-                
-                key = self.keys[self.index_id] 
-                self.target_marker = self.detected_markers[key]
-                
-                # obtain the quaterianion and the reference angle between, marker and aruco 
-                self.__set_target_angle()
+            self.get_logger().info(f"[CENTERED] Marker {current_key} centered. error = {self.error}")
+            if self.img is not None:
+                self.__save_circle_img(self.img)
+            self.robot_cmd_vel = Twist()
+            self.vel_pub.publish(self.robot_cmd_vel)
+            self.index_id += 1
+            return
 
-                self.robot_cmd_vel = Twist()
-                self.vel_pub.publish(self.robot_cmd_vel)
-
-           
-            return 
-
+            
         # velocity and control
         vel = Twist()
-        vel.angular.z = max(-self.max_angular, min(self.Kp * self.error, self.max_angular))
+        vel.angular.z = self.error
         self.vel_pub.publish(vel)
         
 
-    def __set_target_angle(self):
-        dx = self.target_marker.transform.translation.x - self.robot_odom.pose.pose.position.x
-        dy = self.target_marker.transform.translation.y - self.robot_odom.pose.pose.position.y
-        self.angle_target = math.atan2(dy, dx)            
+             
    
     def __save_circle_img(self, img: CompressedImage):
         try:
