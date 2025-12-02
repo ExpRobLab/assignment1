@@ -34,6 +34,8 @@ class ArucoDetector(Node):
         print("Workspace:", workspace)
         print("Dataset path:", self.dataset_path)
 
+        os.makedirs(self.dataset_path, exist_ok=True)
+
         # Listeners
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -56,7 +58,7 @@ class ArucoDetector(Node):
         self.num = 0
         
         # angular control params
-        self.treshold = 0.1 
+        self.treshold = 0.01 
         self.Kp = 1.0
         self.max_angular = 1.0
 
@@ -186,7 +188,9 @@ class ArucoDetector(Node):
 
                         # save to disk (one file per marker id)
                         save_path = f"{self.dataset_path}/marker_{self.target_marker_id}.png"
-                        cv2.imwrite(save_path, cv_image)
+                        success = cv2.imwrite(save_path, cv_image)
+                        print("Write success:", success)
+
 
                         # publish annotated image
                         img_msg = Image()
