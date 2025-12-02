@@ -6,7 +6,9 @@ from rclpy.node import Node
 import numpy as np
 import cv2
 import math
+import os
 
+from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from aruco_opencv_msgs.msg import ArucoDetection
 from sensor_msgs.msg import CompressedImage, Image
@@ -19,6 +21,19 @@ class ArucoDetector(Node):
     def __init__(self):
         super().__init__('aruco_detection_node')
         
+        # Path of the current script
+        current_folder = os.path.dirname(os.path.abspath(__file__))
+
+        # Go to workspace root
+        workspace = os.path.abspath(os.path.join(current_folder, "..", "..","..",".."))
+
+        # Join with a folder at workspace level
+        self.dataset_path = os.path.join(workspace, "images")
+
+        print("Current folder:", current_folder)
+        print("Workspace:", workspace)
+        print("Dataset path:", self.dataset_path)
+
         # Listeners
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -60,8 +75,8 @@ class ArucoDetector(Node):
         self.final_image_published = False
 
         self.image_sub = self.create_subscription(
-            CompressedImage,
-            '/camera/image/compressed',
+            Image,
+            '/camera/image',
             self.__image_callback,
             1
         )
@@ -152,8 +167,13 @@ class ArucoDetector(Node):
             if (not self.final_image_published) and (self.last_image_msg is not None):
                 try:
                     # decode JPEG/PNG from CompressedImage.data
-                    np_arr = np.frombuffer(self.last_image_msg.data, np.uint8)
-                    cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                    height = self.last_image_msg.height
+                    width = self.last_image_msg.width
+                    channels = 3  # oppure 1 se mono
+
+                    cv_image = np.frombuffer(self.last_image_msg.data, dtype=np.uint8).reshape(height, width, channels)
+
+                    cv_image = cv_image.reshape((height, width, 3))
 
                     if cv_image is None:
                         self.get_logger().warn("Could not decode compressed image, nothing to save.")
@@ -165,7 +185,7 @@ class ArucoDetector(Node):
                         cv2.circle(cv_image, center, radius, (0, 0, 255), 3)
 
                         # save to disk (one file per marker id)
-                        save_path = f"/root/ws_ass1/marker_{self.target_marker_id}.png"
+                        save_path = f"{self.dataset_path}/marker_{self.target_marker_id}.png"
                         cv2.imwrite(save_path, cv_image)
 
                         # publish annotated image
