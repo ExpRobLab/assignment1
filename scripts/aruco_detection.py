@@ -14,7 +14,7 @@ from sensor_msgs.msg import CompressedImage
 from tf2_ros import Buffer, TransformListener, TransformException, LookupException, ConnectivityException, ExtrapolationException
 from nav_msgs.msg import Odometry
 from tf_transformations import euler_from_quaternion
-VERBOSE = False
+VERBOSE = True
 
 
 class ArucoDetector(Node):
@@ -25,8 +25,9 @@ class ArucoDetector(Node):
 
         # Current script directory
         current_path = os.path.dirname(os.path.abspath(__file__))
+
         # Go up to the workspace root
-        self.workspace_path = os.path.abspath(os.path.join(current_path, "../../../../../.."))
+        self.workspace_path = os.path.abspath(os.path.join(current_path, "../../../../images"))
 
         # Listeners
         self.tf_buffer = Buffer()
@@ -54,18 +55,17 @@ class ArucoDetector(Node):
         self.robot_cmd_vel: Twist = Twist()
         self.robot_cmd_vel.angular.z = 0.5  # Initial angular velocity
         self.robot_odom = None
+        
         self.index_id =0
         self.angle_target = 0
         self.error = float('inf')
         self.target_marker = None 
-        self.keys = list(self.detected_markers.keys())
+        self.keys = None
+        self.img : CompressedImage = CompressedImage()
 
 
     def __image_callback(self,msg: CompressedImage):
-        if self.save_img:
-            self.save_img = False
-            
-            self.__save_circle_img(msg)
+        self.img =  msg
 
     def __odom_callback(self, msg):
         self.robot_odom = msg
@@ -92,6 +92,7 @@ class ArucoDetector(Node):
                     self.detected_markers = dict(sorted(self.detected_markers.items()))
                     first_key = next(iter(self.detected_markers))
                     self.target_marker = self.detected_markers[first_key]
+                    self.keys = list(self.detected_markers.keys())
                     self.__set_target_angle()
                     
                     self.get_logger().info(f"[DETECT] Detected 5 markers, {list(self.detected_markers.keys())}"f" starting centering on: {first_key}")
@@ -112,7 +113,7 @@ class ArucoDetector(Node):
             current_key = self.keys[self.index_id]
             # self.get_logger().info(f"Marker: {current_key}, Index: {self.index_id}")
         except Exception as e:
-            self.get_logger().info(e)
+            #self.get_logger().info(e)
             current_key = None
             # self.get_logger().info(f" Marker: {current_key}, Index: {self.index_id}")
         
@@ -132,17 +133,19 @@ class ArucoDetector(Node):
             self.index_id = 0
             self.robot_cmd_vel = Twist()
             self.vel_pub.publish(self.robot_cmd_vel)
+            self.keys = None
             return 
 
         if  abs(self.error) < self.treshold :
-            keys = list(self.detected_markers.keys()) 
-            
-
             self.get_logger().info(f"[CENTERED] Marker {current_key} centered. eror = {self.error}")
             # increment the indiex to take the next marker
-            self.index_id += 1    
-            if self.index_id < len(self.detected_markers):
-                self.save_img = True
+              
+            self.__save_circle_img(self.img)
+            self.index_id += 1 
+            self.get_logger().info(f"")
+            if self.index_id <len(self.detected_markers):
+                
+                
                 key = self.keys[self.index_id] 
                 self.target_marker = self.detected_markers[key]
                 
@@ -152,6 +155,7 @@ class ArucoDetector(Node):
                 self.robot_cmd_vel = Twist()
                 self.vel_pub.publish(self.robot_cmd_vel)
 
+           
             return 
 
         # velocity and control
@@ -183,8 +187,8 @@ class ArucoDetector(Node):
 
             # save to disk
             
-            key = self.keys[self.index_id - 1]
-            image_path = os.path.join(self.workspace_path, f"marker_{key}.png")
+            key = self.keys[self.index_id ]
+            image_path = os.path.join(self.workspace_path, f"{key}.png")
             cv2.imwrite(image_path, cv_image)
             self.get_logger().info(f"PNG saved {image_path}, and published")
 
@@ -198,10 +202,7 @@ class ArucoDetector(Node):
 
             self.final_image_pub.publish(img_msg)
 
-            self.get_logger().info(
-                f"Centered on marker_{self.target_marker_id}. "
-                f"Drew circle, saved to {self.image_path} and published on /final_marker_image."
-            )
+        
 
         except Exception as e:
             self.get_logger().warn(f"Error converting/saving/publishing image: {e}")
