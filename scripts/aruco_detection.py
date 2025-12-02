@@ -38,6 +38,7 @@ class ArucoDetector(Node):
 
         # Market detection
         self.state = "detecting"
+        self.num = 0
         
         # angular control params
         self.treshold = 0.1 
@@ -94,7 +95,7 @@ class ArucoDetector(Node):
 
                 if len(self.detected_ids) == 5 and self.state == "detecting":
                     self.sorted_ids = sorted(list(self.detected_ids))
-                    self.target_marker_id = self.sorted_ids[0]
+                    self.target_marker_id = self.sorted_ids[self.num]
                     self.state = "centering"
                     self.get_logger().info(
                         f"Detected 5 markers. IDs: {self.sorted_ids}. "
@@ -147,7 +148,7 @@ class ArucoDetector(Node):
             self.robot_cmd_vel.angular.z = 0.0
             self.vel_pub.publish(self.robot_cmd_vel)
 
-            # process and save/publish the final frame ONLY ONCE
+            # process and save/publish the final frame for THIS marker
             if (not self.final_image_published) and (self.last_image_msg is not None):
                 try:
                     # decode JPEG/PNG from CompressedImage.data
@@ -157,14 +158,14 @@ class ArucoDetector(Node):
                     if cv_image is None:
                         self.get_logger().warn("Could not decode compressed image, nothing to save.")
                     else:
-                        # draw circle around marker
+                        # draw circle around marker (center of image)
                         h, w = cv_image.shape[:2]
                         center = (w // 2, h // 2)
                         radius = min(h, w) // 8
                         cv2.circle(cv_image, center, radius, (0, 0, 255), 3)
 
-                        # save to disk
-                        save_path = "/root/ws_ass1/last_marker.png"
+                        # save to disk (one file per marker id)
+                        save_path = f"/root/ws_ass1/marker_{self.target_marker_id}.png"
                         cv2.imwrite(save_path, cv_image)
 
                         # publish annotated image
@@ -192,9 +193,19 @@ class ArucoDetector(Node):
                     "Centered on marker but no image received yet, nothing to save."
                 )
 
-            self.state = "done"
-
-
+            # decide whether to move to next marker or finish
+            if self.num < len(self.sorted_ids) - 1:
+                self.num = self.num + 1
+                self.target_marker_id = self.sorted_ids[self.num]
+                self.state = "centering"
+                self.final_image_published = False
+                self.get_logger().info(
+                    f"Moving to next target marker_{self.target_marker_id}"
+                )
+            else:
+                # all markers processed
+                self.state = "done"
+                self.get_logger().info("All markers processed, state = done.")
 
 
     def __image_callback(self, msg: CompressedImage):
