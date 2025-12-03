@@ -16,15 +16,15 @@ def generate_launch_description():
         description='Name of the Gazebo world file to load'
     )
 
-    pkg_world = get_package_share_directory('worlds_manager')
-    world_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_world, 'launch', 'my_launch_assignment.py'),
-        ),
-        launch_arguments={
-        'world': LaunchConfiguration('world'),
-        }.items()
-    )
+    # pkg_world = get_package_share_directory('worlds_manager')
+    # world_launch = IncludeLaunchDescription(
+    #     PythonLaunchDescriptionSource(
+    #         os.path.join(pkg_world, 'launch', 'my_launch_assignment.py'),
+    #     ),
+    #     launch_arguments={
+    #     'world': LaunchConfiguration('world'),
+    #     }.items()
+    # )
 
     pkg_robot = get_package_share_directory('robot_manager')
     robot_launch = IncludeLaunchDescription(
@@ -54,7 +54,7 @@ def generate_launch_description():
 
     launchDescriptionObject = LaunchDescription()
     launchDescriptionObject.add_action(world_arg)
-    launchDescriptionObject.add_action(world_launch)
+    # launchDescriptionObject.add_action(world_launch)
     launchDescriptionObject.add_action(robot_launch)
     launchDescriptionObject.add_action(aruco_launch)
     launchDescriptionObject.add_action(marker_detection)    

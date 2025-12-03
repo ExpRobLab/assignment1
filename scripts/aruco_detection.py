@@ -10,7 +10,7 @@ import math
 
 from geometry_msgs.msg import Twist
 from aruco_opencv_msgs.msg import ArucoDetection
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CompressedImage, Image
 from tf2_ros import Buffer, TransformListener, TransformException, LookupException, ConnectivityException, ExtrapolationException
 from nav_msgs.msg import Odometry
 from tf_transformations import euler_from_quaternion
@@ -34,7 +34,7 @@ class ArucoDetector(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # Subscribers
-        self.image_sub = self.create_subscription(CompressedImage,'/camera/image/compressed',self.__image_callback,1)
+        self.image_sub = self.create_subscription(Image,'/camera/rgb/image_raw',self.__image_callback,1)
         self.subscriber = self.create_subscription(ArucoDetection,'/aruco_detections',self.__detection_callback,1)
         self.odom_subscriber = self.create_subscription(Odometry,'/odom',self.__odom_callback,1)
         self.detected_markers: dict = {}
@@ -44,16 +44,16 @@ class ArucoDetector(Node):
         self.timer_vel = self.create_timer(0.01, self.__control)
         
         # Publisher img of the marker
-        self.final_image_pub = self.create_publisher( CompressedImage,'/final_marker_image',1)
+        self.final_image_pub = self.create_publisher(Image,'/final_marker_image',1)
         self.save_img = False
 
         self.state = "detecting"
         self.treshold = 0.1 # radiants
-        self.Kp = 1.0
+        self.Kp = 0.1
         self.max_angular = 1.0
 
         self.robot_cmd_vel: Twist = Twist()
-        self.robot_cmd_vel.angular.z = 0.5  # Initial angular velocity
+        self.robot_cmd_vel.angular.z = 0.3 # Initial angular velocity
         self.robot_odom = None
         
         self.index_id =0
@@ -61,10 +61,10 @@ class ArucoDetector(Node):
         self.error = float('inf')
         self.target_marker = None 
         self.keys = None
-        self.img : CompressedImage = CompressedImage()
+        self.img : Image = Image()
 
 
-    def __image_callback(self,msg: CompressedImage):
+    def __image_callback(self,msg: Image):
         self.img =  msg
 
     def __odom_callback(self, msg):
@@ -121,10 +121,10 @@ class ArucoDetector(Node):
 
         try:
             # express marker position in the robot frame
-            base_T_marker = self.tf_buffer.lookup_transform('base_footprint',current_key,rclpy.time.Time())
-         
+            # base_T_marker = self.tf_buffer.lookup_transform('base_footprint',current_key,rclpy.time.Time())
+            base_T_marker = self.detected_markers[current_key]
         except Exception as e:
-            self.get_logger().info(f"error in control: {e}")
+            self.get_logger().info(f"error in control: {e}, trabsf = {self.detected_markers[current_key]}")
             return  
 
         X = base_T_marker.transform.translation.x
@@ -154,12 +154,22 @@ class ArucoDetector(Node):
 
              
    
-    def __save_circle_img(self, img: CompressedImage):
+    def __save_circle_img(self, img: Image):
+       
+        cv2.namedWindow('window', cv2.WINDOW_AUTOSIZE)
+        self.get_logger().info('ImageFeature node started. Subscribed to /camera/image/compressed')
+
+
         try:
             # decode JPEG/PNG from CompressedImage.data
-            np_arr = np.frombuffer(img.data, np.uint8)
-            cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            # np_arr = np.frombuffer(img.data, np.uint8)
+            # cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
+            height = img.height
+            width = img.width
+            channels = 3
+            cv_image = np.frombuffer(img.data,dtype=np.uint8 ).reshape(height,width,channels)
+            cv_image = cv_image.reshape((height,width,3))
             if cv_image is None:
                 self.get_logger().warn("Could not decode compressed image, nothing to save.")
                 return
@@ -180,10 +190,17 @@ class ArucoDetector(Node):
 
             # re-encode to JPEG before publishing as CompressedImage
             _, jpeg_data = cv2.imencode('.jpg', cv_image)
-            img_msg = CompressedImage()
+            # img_msg = CompressedImage()
+            # img_msg.header = img.header
+            # img_msg.format = 'jpeg'
+            # img_msg.data = jpeg_data.tobytes()
+            img_msg = Image()
             img_msg.header = img.header
-            img_msg.format = 'jpeg'
-            img_msg.data = jpeg_data.tobytes()
+            img_msg.height,img_msg.width = cv_image.shape[:2]
+            img_msg.encoding = "bgr8"
+            img_msg.is_bigendian = 0
+            img_msg.step = img_msg.width*3
+            img_msg.data = cv_image.tobytes()
 
             self.final_image_pub.publish(img_msg)
 
