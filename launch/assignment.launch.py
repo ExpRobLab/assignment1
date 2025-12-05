@@ -37,7 +37,7 @@ def generate_launch_description():
         # }.items()
     )
 
-    # TODO aruco_tracker.launch
+    # Launch the aruco tracker
     pkg_aruco_opencv = get_package_share_directory('aruco_opencv')
     aruco_launch = IncludeLaunchDescription(
         XMLLaunchDescriptionSource(
@@ -45,11 +45,15 @@ def generate_launch_description():
         )
     )
     
-    # TODO run scripts of the assignment
+    # Run scripts of the assignment
     marker_detection = Node(
         package="assignment1",
         executable="aruco_detection.py",
-        output='screen'
+        output='screen',
+        parameters=[{
+            'image_topic': '/camera/image',
+            'base_frame': 'base_footprint'
+        }]
     )
 
     launchDescriptionObject = LaunchDescription()

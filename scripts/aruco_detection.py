@@ -20,18 +20,23 @@ VERBOSE = False
 class ArucoDetector(Node):
     def __init__(self):
         super().__init__('aruco_detection_node')
-        
+
+        # Parameters
+        self.declare_parameter('image_topic', '/camera/image')
+        self.declare_parameter('base_frame', 'base_footprint')
+
+        image_topic = self.get_parameter('image_topic').value
+        self.base_frame = self.get_parameter('base_frame').value
+
         # Path of the current script
         current_folder = os.path.dirname(os.path.abspath(__file__))
-
         # Go to workspace root
         workspace = os.path.abspath(os.path.join(current_folder, "..", "..","..",".."))
-
         # Join with a folder at workspace level
-        self.dataset_path = os.path.join(workspace, "images")
+        self.dataset_path = os.path.join(workspace, "resources")
 
-        print("Current folder:", current_folder)
-        print("Workspace:", workspace)
+        # print("Current folder:", current_folder)
+        # print("Workspace:", workspace)
         print("Dataset path:", self.dataset_path)
 
         os.makedirs(self.dataset_path, exist_ok=True)
@@ -73,12 +78,12 @@ class ArucoDetector(Node):
         self.robot_cmd_vel.angular.z = 0.5
 
         # Image handling: subscribe to camera and publish final frame
-        self.last_image_msg = None
+        self.last_image_msg: Image = Image()
         self.final_image_published = False
 
         self.image_sub = self.create_subscription(
             Image,
-            '/camera/image',
+            image_topic,
             self.__image_callback,
             1
         )
@@ -138,7 +143,7 @@ class ArucoDetector(Node):
         try:
             # express marker position in the robot frame
             base_T_marker = self.tf_buffer.lookup_transform(
-                'base_footprint',
+                self.base_frame,
                 frame_id,
                 rclpy.time.Time()
             )
@@ -232,7 +237,7 @@ class ArucoDetector(Node):
                 self.get_logger().info("All markers processed, state = done.")
 
 
-    def __image_callback(self, msg: CompressedImage):
+    def __image_callback(self, msg: Image):
         # save last frame
         if self.state in ["detecting", "centering"]:
             self.last_image_msg = msg
