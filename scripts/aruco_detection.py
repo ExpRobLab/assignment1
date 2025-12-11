@@ -65,7 +65,7 @@ class ArucoDetector(Node):
         
         # angular control params
         self.treshold = 0.01 
-        self.Kp = .5
+        self.Kp = 0.3
         self.max_angular = 1.0
 
         # marker tracking
@@ -180,7 +180,7 @@ class ArucoDetector(Node):
 
         self.get_logger().info(f"state {self.state}, {frame_id} target, {len(self.detected_ids)},angletomarker {round(angle_to_marker, 5)}  angularcmd {round(angular_cmd, 5)} localz {self.local_z} ")
 
-        if self.local_z is None:
+        if self.local_z is None and self.state == "done":
             return
         
         if self.state == "localopt" and abs(self.local_z) < self.treshold:
