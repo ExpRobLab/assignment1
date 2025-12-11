@@ -26,18 +26,18 @@ def generate_launch_description():
         }.items()
     )
 
-    pkg_robot = get_package_share_directory('robot_manager')
+    pkg_robot = get_package_share_directory('bme_gazebo_basics')
     robot_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(pkg_robot, 'launch', 'spawn_robot_assignment.launch.py'),
+            os.path.join(pkg_robot, 'launch', 'my_spawn_robot.launch.py'),
         )
-        # ,
-        # launch_arguments={
-        # 'x_arg': 0,
-        # }.items()
+        ,
+        launch_arguments={
+        'model': 'mogi_bot_skid_steer.urdf',
+        }.items()
     )
 
-    # TODO aruco_tracker.launch
+    # Launch the aruco tracker
     pkg_aruco_opencv = get_package_share_directory('aruco_opencv')
     aruco_launch = IncludeLaunchDescription(
         XMLLaunchDescriptionSource(
@@ -45,11 +45,15 @@ def generate_launch_description():
         )
     )
     
-    # TODO run scripts of the assignment
+    # Run scripts of the assignment
     marker_detection = Node(
         package="assignment1",
         executable="aruco_detection.py",
-        output='screen'
+        output='screen',
+        parameters=[{
+            'image_topic': '/camera/image',
+            'base_frame': 'base_footprint'
+        }]
     )
 
     launchDescriptionObject = LaunchDescription()

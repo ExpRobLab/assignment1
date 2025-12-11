@@ -5,12 +5,14 @@ from rclpy.node import Node
 
 import numpy as np
 import cv2
-import imutils
 import math
+import os
 
+from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from aruco_opencv_msgs.msg import ArucoDetection
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CompressedImage, Image
+from nav_msgs.msg import Odometry
 from tf2_ros import Buffer, TransformListener, TransformException, LookupException, ConnectivityException, ExtrapolationException
 
 VERBOSE = False
@@ -19,103 +21,251 @@ VERBOSE = False
 class ArucoDetector(Node):
     def __init__(self):
         super().__init__('aruco_detection_node')
-        
+
+        # Parameters
+        self.declare_parameter('image_topic', '/camera/color/image_raw')
+        self.declare_parameter('base_frame', 'base_footprint')
+
+        image_topic = self.get_parameter('image_topic').value
+        self.base_frame = self.get_parameter('base_frame').value
+
+        # Path of the current script
+        current_folder = os.path.dirname(os.path.abspath(__file__))
+        # Go to workspace root
+        workspace = os.path.abspath(os.path.join(current_folder, "..", "..","..",".."))
+        # Join with a folder at workspace level
+        self.dataset_path = os.path.join(workspace, "resources")
+
+        # print("Current folder:", current_folder)
+        # print("Workspace:", workspace)
+        print("Dataset path:", self.dataset_path)
+
+        os.makedirs(self.dataset_path, exist_ok=True)
+
         # Listeners
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # Subscribers
-        self.subscriber = self.create_subscription(ArucoDetection,'/aruco_detections',self.__detection_callback,1)
+        self.subscriber = self.create_subscription(
+            ArucoDetection,
+            '/aruco_detections',
+            self.__detection_callback,
+            1
+        )
         self.detected_markers: dict = {}
 
         # Publishers cmd velocity
-        self.vel_pub = self.create_publisher(Twist,'/cmd_vel',1)
+        self.vel_pub = self.create_publisher(Twist, '/cmd_vel', 1)
         self.timer = self.create_timer(0.01, self.__control)
 
-        # TODO Publisher img of the marker
-        
-
+        # Market detection
         self.state = "detecting"
-        self.treshold = 4.0  # radiants
-        self.Kp = 1.0
+        self.num = 0
+        
+        # angular control params
+        self.treshold = 0.01 
+        self.Kp = 0.3
         self.max_angular = 1.0
 
+        # marker tracking
+        self.detected_ids = set()
+        self.sorted_ids = []
+        self.target_marker_id = None    
+
+        # command to robot
         self.robot_cmd_vel: Twist = Twist()
-        self.robot_cmd_vel.angular.z = 0.5  # Initial angular velocity
+        self.robot_cmd_vel.linear.x = 0.0
+        self.robot_cmd_vel.angular.z = 0.5
 
+        # Image handling: subscribe to camera and publish final frame
+        self.last_image_msg: Image = Image()
+        self.final_image_published = False
 
+        self.image_sub = self.create_subscription(
+            Image,
+            image_topic,
+            self.__image_callback,
+            1
+        )
+
+        self.final_image_pub = self.create_publisher(
+            Image,
+            '/final_marker_image',
+            1
+        )
+
+        self.local_z = None
 
     def __detection_callback(self, msg):
+        for marker in msg.markers:
+            if self.target_marker_id is not None:
+                if self.target_marker_id == marker.marker_id:
+                    self.local_z    = marker.pose.position.x
+
         if self.state != "detecting":
             return
         
+        # spin while detecting
         self.vel_pub.publish(self.robot_cmd_vel)
 
         for marker in msg.markers:
             frame_id = f"marker_{marker.marker_id}"
-
+            
             try:
                 odom_T_arucomarker = self.tf_buffer.lookup_transform(
-                    'odom',
+                    self.base_frame,
                     frame_id,
                     rclpy.time.Time()
                 )
+
+                # store transform and numeric ID
                 self.detected_markers[frame_id] = odom_T_arucomarker
-                
-                if len(self.detected_markers) == 5:
-                    self.detected_markers = dict(sorted(self.detected_markers.items()))
+                self.detected_ids.add(marker.marker_id)
+                self.get_logger().info(f"state {self.state}, {frame_id} Detected here, {len(self.detected_ids)}, {self.detected_ids}, localopt {self.local_z} ")
+
+                if len(self.detected_ids) == 5 and self.state == "detecting":
+                    self.sorted_ids = sorted(list(self.detected_ids))
+                    self.target_marker_id = self.sorted_ids[self.num]
                     self.state = "centering"
+                    self.get_logger().info(
+                        f"Detected 5 markers. IDs: {self.sorted_ids}. "
+                        f"Target is marker_{self.target_marker_id}"
+                    )
 
                 if frame_id not in self.detected_markers:
                     self.get_logger().info(f"Detected new marker: {frame_id}")
 
             except TransformException:
+                self.get_logger().info("ERROR")
                 continue
-    
-    
+
     def __control(self):
-        if self.state != "centering":
+        if self.state in ["detecting", "done"]:
             return
-        
-        marker_id, odom_T_arucomarker = next(iter(self.detected_markers.items()))
 
-        odom_T_camera = self.tf_buffer.lookup_transform(
-                    'odom',
-                    'camera_link_optical',
-                    rclpy.time.Time()
-                )
-        
-        x = odom_T_arucomarker.transform.translation.x - odom_T_camera.transform.translation.x
-        y = odom_T_arucomarker.transform.translation.y - odom_T_camera.transform.translation.y
-        angle_to_marker = math.atan2(y, x)
+        if self.target_marker_id is None:
+            return
 
-        self.robot_cmd_vel.angular.z = max(-self.max_angular, min(self.max_angular, self.Kp * angle_to_marker))
+        frame_id = f"marker_{self.target_marker_id}"
+
+        try:
+            base_T_marker = self.tf_buffer.lookup_transform(
+                self.base_frame,
+                frame_id,
+                rclpy.time.Time()
+            )
+        except TransformException:
+            return
+
+        X = base_T_marker.transform.translation.x
+        Y = base_T_marker.transform.translation.y
+        angle_to_marker = math.atan2(Y, X)
+        self.robot_cmd_vel.linear.x = 0.0
+
+        # P-controller on angle in robot frame
+        angular_cmd = self.Kp * angle_to_marker if self.state == "centering" else self.Kp * -self.local_z  # local optimization (visual servoing)
+        angular_cmd = max(-self.max_angular, min(self.max_angular, angular_cmd))
+        self.robot_cmd_vel.angular.z = angular_cmd
         self.vel_pub.publish(self.robot_cmd_vel)
 
-        # Remove the element from the dictionary
-        if abs(angle_to_marker) < self.treshold:
+        # mode 1 for switch: go to global optima until you see the target, then switch to visual servoing
+        if self.local_z is not None and self.state == "centering":
+            self.state = "localopt"
+
+        # mode 2 for switch: go to global optima and switch to local optimization
+        # if abs(angle_to_marker) < self.treshold and self.state == "centering":
+        #     # change to local optimization (visual servoing)
+        #     self.state = "localopt"
+
+        self.get_logger().info(f"state {self.state}, {frame_id} target, {len(self.detected_ids)},angletomarker {round(angle_to_marker, 5)}  angularcmd {round(angular_cmd, 5)} localz {self.local_z} ")
+
+        if self.local_z is None and self.state == "done":
+            return
+        
+        if self.state == "localopt" and abs(self.local_z) < self.treshold:
             self.robot_cmd_vel.angular.z = 0.0
             self.vel_pub.publish(self.robot_cmd_vel)
 
-            self.get_logger().info(f"Pointed marker: {marker_id}\n")
-            # TODO self.get_logger().info("Pres <butto> to continue...\n")
-            self.detected_markers.pop(marker_id)
-        
-        if not self.detected_markers:
-            self.robot_cmd_vel.angular.z = 0.5
-            self.vel_pub.publish(self.robot_cmd_vel)
-            self.state = "detecting"
+            # process and save/publish the final frame for THIS marker
+            if (not self.final_image_published) and (self.last_image_msg is not None):
+                try:
+                    # decode JPEG/PNG from CompressedImage.data
+                    height = self.last_image_msg.height
+                    width = self.last_image_msg.width
+                    channels = 3  # oppure 1 se mono
+
+                    cv_image = np.frombuffer(self.last_image_msg.data, dtype=np.uint8).reshape(height, width, channels)
+
+                    cv_image = cv_image.reshape((height, width, 3))
+
+                    if cv_image is None:
+                        self.get_logger().warn("Could not decode compressed image, nothing to save.")
+                    else:
+                        h, w = cv_image.shape[:2]
+                        center = (w // 2, h // 2)
+                        radius = min(h, w) // 8
+                        cv2.circle(cv_image, center, radius, (0, 0, 255), 3)
+                        save_path = f"{self.dataset_path}/marker_{self.target_marker_id}.png"
+                        success = cv2.imwrite(save_path, cv_image)
+                        print("Write success:", success)
+                        img_msg = Image()
+                        img_msg.header = self.last_image_msg.header
+                        img_msg.height, img_msg.width = cv_image.shape[:2]
+                        img_msg.encoding = 'bgr8'
+                        img_msg.is_bigendian = 0
+                        img_msg.step = img_msg.width * 3
+                        img_msg.data = cv_image.tobytes()
+                        self.final_image_pub.publish(img_msg)
+                        self.final_image_published = True
+                        self.get_logger().info(
+                            f"Centered on marker_{self.target_marker_id}. "
+                            f"Drew circle, saved to {save_path} and published on /final_marker_image."
+                        )
+
+                except Exception as e:
+                    self.get_logger().warn(f"Error converting/saving/publishing image: {e}")
+
+            elif self.last_image_msg is None:
+                self.get_logger().warn(
+                    "Centered on marker but no image received yet, nothing to save."
+                )
+
+            # decide whether to move to next marker or finish
+            if self.num < len(self.sorted_ids) - 1:
+                self.num = self.num + 1
+                self.target_marker_id = self.sorted_ids[self.num]
+                self.state = "centering"
+                self.local_z = None
+                self.final_image_published = False
+                self.get_logger().info(
+                    f"Moving to next target marker_{self.target_marker_id}"
+                )
+            else:
+                # all markers processed
+                self.state = "done"
+                self.local_z = None
+                self.get_logger().info("All markers processed, state = done.")
+
+
+    def __image_callback(self, msg: Image):
+        # save last frame
+        if self.state in ["detecting", "centering", "localopt"]:
+            self.last_image_msg = msg
+
 
 def main(args=None):
     rclpy.init(args=args)
-
+    node = None
     try:
         node = ArucoDetector()
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().info("Shutting down ImageFeature node")
+        if node is not None:
+            node.get_logger().info("Shutting down ImageFeature node")
     finally:
-        node.destroy_node()
+        if node is not None:
+            node.destroy_node()
         cv2.destroyAllWindows()
         rclpy.shutdown()
 
