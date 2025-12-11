@@ -10,33 +10,6 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
 
-    # World spawn
-    world_arg = DeclareLaunchArgument(
-        'world', default_value='my_world_assignment.sdf',
-        description='Name of the Gazebo world file to load'
-    )
-
-    pkg_world = get_package_share_directory('worlds_manager')
-    world_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_world, 'launch', 'my_launch_assignment.py'),
-        ),
-        launch_arguments={
-        'world': LaunchConfiguration('world'),
-        }.items()
-    )
-
-    pkg_robot = get_package_share_directory('robot_manager')
-    robot_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_robot, 'launch', 'spawn_robot_assignment.launch.py'),
-        )
-        # ,
-        # launch_arguments={
-        # 'x_arg': 0,
-        # }.items()
-    )
-
     # Launch the aruco tracker
     pkg_aruco_opencv = get_package_share_directory('aruco_opencv')
     aruco_launch = IncludeLaunchDescription(
@@ -57,9 +30,6 @@ def generate_launch_description():
     )
 
     launchDescriptionObject = LaunchDescription()
-    launchDescriptionObject.add_action(world_arg)
-    launchDescriptionObject.add_action(world_launch)
-    launchDescriptionObject.add_action(robot_launch)
     launchDescriptionObject.add_action(aruco_launch)
     launchDescriptionObject.add_action(marker_detection)    
 

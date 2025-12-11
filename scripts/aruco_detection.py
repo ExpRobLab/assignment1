@@ -65,7 +65,7 @@ class ArucoDetector(Node):
         
         # angular control params
         self.treshold = 0.01 
-        self.Kp = 1.
+        self.Kp = .5
         self.max_angular = 1.0
 
         # marker tracking
