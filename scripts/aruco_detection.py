@@ -12,6 +12,7 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from aruco_opencv_msgs.msg import ArucoDetection
 from sensor_msgs.msg import CompressedImage, Image
+from nav_msgs.msg import Odometry
 from tf2_ros import Buffer, TransformListener, TransformException, LookupException, ConnectivityException, ExtrapolationException
 
 VERBOSE = False
@@ -22,7 +23,7 @@ class ArucoDetector(Node):
         super().__init__('aruco_detection_node')
 
         # Parameters
-        self.declare_parameter('image_topic', '/camera/image')
+        self.declare_parameter('image_topic', '/camera/color/image_raw')
         self.declare_parameter('base_frame', 'base_footprint')
 
         image_topic = self.get_parameter('image_topic').value
@@ -64,7 +65,7 @@ class ArucoDetector(Node):
         
         # angular control params
         self.treshold = 0.01 
-        self.Kp = 1.0
+        self.Kp = 1.
         self.max_angular = 1.0
 
         # marker tracking
@@ -94,7 +95,14 @@ class ArucoDetector(Node):
             1
         )
 
+        self.local_z = None
+
     def __detection_callback(self, msg):
+        for marker in msg.markers:
+            if self.target_marker_id is not None:
+                if self.target_marker_id == marker.marker_id:
+                    self.local_z    = marker.pose.position.x
+
         if self.state != "detecting":
             return
         
@@ -103,10 +111,10 @@ class ArucoDetector(Node):
 
         for marker in msg.markers:
             frame_id = f"marker_{marker.marker_id}"
-
+            
             try:
                 odom_T_arucomarker = self.tf_buffer.lookup_transform(
-                    'odom',
+                    self.base_frame,
                     frame_id,
                     rclpy.time.Time()
                 )
@@ -114,6 +122,7 @@ class ArucoDetector(Node):
                 # store transform and numeric ID
                 self.detected_markers[frame_id] = odom_T_arucomarker
                 self.detected_ids.add(marker.marker_id)
+                self.get_logger().info(f"state {self.state}, {frame_id} Detected here, {len(self.detected_ids)}, {self.detected_ids}, localopt {self.local_z} ")
 
                 if len(self.detected_ids) == 5 and self.state == "detecting":
                     self.sorted_ids = sorted(list(self.detected_ids))
@@ -128,11 +137,11 @@ class ArucoDetector(Node):
                     self.get_logger().info(f"Detected new marker: {frame_id}")
 
             except TransformException:
+                self.get_logger().info("ERROR")
                 continue
 
     def __control(self):
-        # only run controller when we are centering a specific marker
-        if self.state != "centering":
+        if self.state in ["detecting", "done"]:
             return
 
         if self.target_marker_id is None:
@@ -141,7 +150,6 @@ class ArucoDetector(Node):
         frame_id = f"marker_{self.target_marker_id}"
 
         try:
-            # express marker position in the robot frame
             base_T_marker = self.tf_buffer.lookup_transform(
                 self.base_frame,
                 frame_id,
@@ -152,21 +160,30 @@ class ArucoDetector(Node):
 
         X = base_T_marker.transform.translation.x
         Y = base_T_marker.transform.translation.y
-
-        # angle of marker in robot frame
         angle_to_marker = math.atan2(Y, X)
-
-        # pure rotation: never move forward
         self.robot_cmd_vel.linear.x = 0.0
 
-        # P controller on angle in robot frame
-        angular_cmd = self.Kp * angle_to_marker
+        # P-controller on angle in robot frame
+        angular_cmd = self.Kp * angle_to_marker if self.state == "centering" else self.Kp * -self.local_z  # local optimization (visual servoing)
         angular_cmd = max(-self.max_angular, min(self.max_angular, angular_cmd))
         self.robot_cmd_vel.angular.z = angular_cmd
         self.vel_pub.publish(self.robot_cmd_vel)
 
-        if abs(angle_to_marker) < self.treshold:
-            # stop rotating
+        # mode 1 for switch: go to global optima until you see the target, then switch to visual servoing
+        if self.local_z is not None and self.state == "centering":
+            self.state = "localopt"
+
+        # mode 2 for switch: go to global optima and switch to local optimization
+        # if abs(angle_to_marker) < self.treshold and self.state == "centering":
+        #     # change to local optimization (visual servoing)
+        #     self.state = "localopt"
+
+        self.get_logger().info(f"state {self.state}, {frame_id} target, {len(self.detected_ids)},angletomarker {round(angle_to_marker, 5)}  angularcmd {round(angular_cmd, 5)} localz {self.local_z} ")
+
+        if self.local_z is None:
+            return
+        
+        if self.state == "localopt" and abs(self.local_z) < self.treshold:
             self.robot_cmd_vel.angular.z = 0.0
             self.vel_pub.publish(self.robot_cmd_vel)
 
@@ -185,19 +202,13 @@ class ArucoDetector(Node):
                     if cv_image is None:
                         self.get_logger().warn("Could not decode compressed image, nothing to save.")
                     else:
-                        # draw circle around marker (center of image)
                         h, w = cv_image.shape[:2]
                         center = (w // 2, h // 2)
                         radius = min(h, w) // 8
                         cv2.circle(cv_image, center, radius, (0, 0, 255), 3)
-
-                        # save to disk (one file per marker id)
                         save_path = f"{self.dataset_path}/marker_{self.target_marker_id}.png"
                         success = cv2.imwrite(save_path, cv_image)
                         print("Write success:", success)
-
-
-                        # publish annotated image
                         img_msg = Image()
                         img_msg.header = self.last_image_msg.header
                         img_msg.height, img_msg.width = cv_image.shape[:2]
@@ -205,9 +216,7 @@ class ArucoDetector(Node):
                         img_msg.is_bigendian = 0
                         img_msg.step = img_msg.width * 3
                         img_msg.data = cv_image.tobytes()
-
                         self.final_image_pub.publish(img_msg)
-
                         self.final_image_published = True
                         self.get_logger().info(
                             f"Centered on marker_{self.target_marker_id}. "
@@ -227,6 +236,7 @@ class ArucoDetector(Node):
                 self.num = self.num + 1
                 self.target_marker_id = self.sorted_ids[self.num]
                 self.state = "centering"
+                self.local_z = None
                 self.final_image_published = False
                 self.get_logger().info(
                     f"Moving to next target marker_{self.target_marker_id}"
@@ -234,12 +244,13 @@ class ArucoDetector(Node):
             else:
                 # all markers processed
                 self.state = "done"
+                self.local_z = None
                 self.get_logger().info("All markers processed, state = done.")
 
 
     def __image_callback(self, msg: Image):
         # save last frame
-        if self.state in ["detecting", "centering"]:
+        if self.state in ["detecting", "centering", "localopt"]:
             self.last_image_msg = msg
 
 
