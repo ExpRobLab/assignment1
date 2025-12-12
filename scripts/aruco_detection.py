@@ -64,8 +64,8 @@ class ArucoDetector(Node):
         self.num = 0
         
         # angular control params
-        self.treshold = 0.01 
-        self.Kp = 0.3
+        self.treshold = 0.03 
+        self.Kp = 0.7
         self.max_angular = 1.0
 
         # marker tracking
@@ -76,7 +76,7 @@ class ArucoDetector(Node):
         # command to robot
         self.robot_cmd_vel: Twist = Twist()
         self.robot_cmd_vel.linear.x = 0.0
-        self.robot_cmd_vel.angular.z = 0.5
+        self.robot_cmd_vel.angular.z = -0.5
 
         # Image handling: subscribe to camera and publish final frame
         self.last_image_msg: Image = Image()
@@ -102,6 +102,8 @@ class ArucoDetector(Node):
             if self.target_marker_id is not None:
                 if self.target_marker_id == marker.marker_id:
                     self.local_z    = marker.pose.position.x
+        
+
 
         if self.state != "detecting":
             return
@@ -110,6 +112,9 @@ class ArucoDetector(Node):
         self.vel_pub.publish(self.robot_cmd_vel)
 
         for marker in msg.markers:
+            if marker.marker_id == 0:
+                continue
+
             frame_id = f"marker_{marker.marker_id}"
             
             try:
@@ -136,16 +141,18 @@ class ArucoDetector(Node):
                 if frame_id not in self.detected_markers:
                     self.get_logger().info(f"Detected new marker: {frame_id}")
 
-            except TransformException:
-                self.get_logger().info("ERROR")
+            except TransformException as e:
+                self.get_logger().info(f"ERROR: {e}")
                 continue
 
     def __control(self):
         if self.state in ["detecting", "done"]:
             return
+        
+        self.get_logger().info(f"Control: state: {self.state}, marker_id: {self.target_marker_id} ")
 
-        if self.target_marker_id is None:
-            return
+        # if self.target_marker_id is None:
+        #     return
 
         frame_id = f"marker_{self.target_marker_id}"
 
@@ -155,9 +162,11 @@ class ArucoDetector(Node):
                 frame_id,
                 rclpy.time.Time()
             )
-        except TransformException:
-            return
+        except TransformException as e :
+           # self.get_logger().info(e)
+           base_T_marker = self.detected_markers[frame_id]
 
+        base_T_marker = self.detected_markers[frame_id]
         X = base_T_marker.transform.translation.x
         Y = base_T_marker.transform.translation.y
         angle_to_marker = math.atan2(Y, X)
