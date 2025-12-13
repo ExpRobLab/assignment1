@@ -84,7 +84,8 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'image_topic': LaunchConfiguration('image_topic'),
-            'base_frame': 'base_link'
+            'base_frame': 'base_link',
+            'resources': 'husarion_sim'
         }]
     )
 

@@ -52,7 +52,8 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'image_topic': '/camera/image',
-            'base_frame': 'base_footprint'
+            'base_frame': 'base_footprint',
+            'resources': '4wheels_skid_steer'
         }]
     )
 

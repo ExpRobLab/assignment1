@@ -25,8 +25,10 @@ class ArucoDetector(Node):
         # Parameters
         self.declare_parameter('image_topic', '/camera/color/image_raw')
         self.declare_parameter('base_frame', 'base_footprint')
+        self.declare_parameter('resources', 'general')
 
         image_topic = self.get_parameter('image_topic').value
+        resources = self.get_parameter('resources').value
         self.base_frame = self.get_parameter('base_frame').value
 
         # Path of the current script
@@ -34,7 +36,7 @@ class ArucoDetector(Node):
         # Go to workspace root
         workspace = os.path.abspath(os.path.join(current_folder, "..", "..","..",".."))
         # Join with a folder at workspace level
-        self.dataset_path = os.path.join(workspace, "resources")
+        self.dataset_path = os.path.join(workspace, f"resources_{resources}")
 
         # print("Current folder:", current_folder)
         # print("Workspace:", workspace)

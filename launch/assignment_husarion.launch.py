@@ -36,7 +36,8 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'image_topic': '/camera/rgb/image_raw',
-            'base_frame': 'base_link'
+            'base_frame': 'base_link',
+            'resources': 'husarion'
         }]
     )
 
